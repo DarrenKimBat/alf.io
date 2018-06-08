@@ -147,7 +147,7 @@ public class WebSecurityConfig {
         private UserManager userManager;
 
         @Autowired
-        private RecaptchaService recaptchaService;
+        private CaptchaService captchaService;
         @Autowired
         private ConfigurationManager configurationManager;
 
@@ -238,37 +238,39 @@ public class WebSecurityConfig {
 
 
             //
-
-            http.addFilterBefore(new RecaptchaLoginFilter(recaptchaService, "/authenticate", "/authentication?recaptchaFailed", configurationManager), UsernamePasswordAuthenticationFilter.class);
+            
+            http.addFilterBefore(new RecaptchaLoginFilter(captchaService, "/authenticate", "/authentication?recaptchaFailed", configurationManager), UsernamePasswordAuthenticationFilter.class);
 
             if(environment.acceptsProfiles(Initializer.PROFILE_DEMO)) {
                 http.addFilterAfter(new UserCreatorBeforeLoginFilter(userManager, "/authenticate"), RecaptchaLoginFilter.class);
             }
         }
-
-
-        private static class RecaptchaLoginFilter extends GenericFilterBean {
+        private static abstract class CaptchaLoginFilter extends GenericFilterBean{
             private final RequestMatcher requestMatcher;
-            private final CaptchaService captchaService;
+            private CaptchaService captchaService;
             private final String recaptchaFailureUrl;
             private final ConfigurationManager configurationManager;
-
-
-            RecaptchaLoginFilter(CaptchaService captchaService,
-                                 String loginProcessingUrl,
-                                 String recaptchaFailureUrl,
-                                 ConfigurationManager configurationManager) {
-                this.requestMatcher = new AntPathRequestMatcher(loginProcessingUrl, "POST");
-                this.captchaService = captchaService;
-                this.recaptchaFailureUrl = recaptchaFailureUrl;
-                this.configurationManager = configurationManager;
+            
+            CaptchaLoginFilter(CaptchaService captchaService,
+                    String loginProcessingUrl,
+                    String recaptchaFailureUrl,
+                    ConfigurationManager configurationManager) {
+			   this.requestMatcher = new AntPathRequestMatcher(loginProcessingUrl, "POST");
+			   this.captchaService = captchaService;
+			   this.recaptchaFailureUrl = recaptchaFailureUrl;
+			   this.configurationManager = configurationManager;
+			}
+            protected abstract CaptchaService getCaptchaService();
+            protected ConfigurationManager getConfigurationManager() {
+            	return this.configurationManager;
             }
-
-
             @Override
             public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
                 HttpServletRequest req = (HttpServletRequest) request;
                 HttpServletResponse res = (HttpServletResponse) response;
+                
+                captchaService = getCaptchaService();
+                
                 boolean captchaEnabled = configurationManager.getBooleanConfigValue(getSystemConfiguration(ENABLE_CAPTCHA_FOR_LOGIN), true);
                 if(captchaEnabled && requestMatcher.matches(req) && !captchaService.checkCaptcha(req)) {
                     res.sendRedirect(recaptchaFailureUrl);
@@ -277,6 +279,23 @@ public class WebSecurityConfig {
 
                 chain.doFilter(request, response);
             }
+        }
+
+        private static class RecaptchaLoginFilter extends CaptchaLoginFilter {
+            
+            RecaptchaLoginFilter(CaptchaService captchaService,
+                    String loginProcessingUrl,
+                    String recaptchaFailureUrl,
+                    ConfigurationManager configurationManager) {
+				super(captchaService, loginProcessingUrl, recaptchaFailureUrl, configurationManager);
+			}
+
+			@Override
+			protected CaptchaService getCaptchaService() {
+				return new RecaptchaService(getConfigurationManager());
+			}
+
+
         }
 
 

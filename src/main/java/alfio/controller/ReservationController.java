@@ -84,7 +84,7 @@ public class ReservationController {
     private final TicketRepository ticketRepository;
     private final EuVatChecker vatChecker;
     private final MollieManager mollieManager;
-    private final RecaptchaService recaptchaService;
+    private final CaptchaService captchaService;
 
     @RequestMapping(value = "/event/{eventName}/reservation/{reservationId}/book", method = RequestMethod.GET)
     public String showPaymentPage(@PathVariable("eventName") String eventName,
@@ -497,7 +497,7 @@ public class ReservationController {
     private boolean isCaptchaInvalid(int cost, PaymentProxy paymentMethod, HttpServletRequest request, Event event) {
         return (cost == 0 || paymentMethod == PaymentProxy.OFFLINE || paymentMethod == PaymentProxy.ON_SITE)
                 && configurationManager.isRecaptchaForOfflinePaymentEnabled(event)
-                && !recaptchaService.checkRecaptcha(request);
+                && !captchaService.checkCaptcha(request);
     }
 
     private void assignTickets(String eventName, String reservationId, PaymentForm paymentForm, BindingResult bindingResult, HttpServletRequest request, boolean preAssign) {

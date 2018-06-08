@@ -29,14 +29,13 @@ import java.io.IOException;
 
 @Component
 @AllArgsConstructor
-public class RecaptchaService {
+public class RecaptchaService implements CaptchaService {
 
     private final OkHttpClient client = new OkHttpClient();
 
     private final ConfigurationManager configurationManager;
-
-
-    public boolean checkRecaptcha(HttpServletRequest req) {
+    
+    public boolean checkCaptcha(HttpServletRequest req) {
         return configurationManager.getStringConfigValue(alfio.model.system.Configuration.getSystemConfiguration(ConfigurationKeys.RECAPTCHA_SECRET))
             .map((secret) -> recaptchaRequest(client, secret, req.getParameter("g-recaptcha-response")))
             .orElse(true);
@@ -60,7 +59,7 @@ public class RecaptchaService {
         }
     }
 
-    @Data
+	@Data
     public static class RecatpchaResponse {
         private boolean success;
     }

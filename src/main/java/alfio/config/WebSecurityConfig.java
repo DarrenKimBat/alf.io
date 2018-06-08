@@ -16,6 +16,7 @@
  */
 package alfio.config;
 
+import alfio.manager.CaptchaService;
 import alfio.manager.RecaptchaService;
 import alfio.manager.system.ConfigurationManager;
 import alfio.manager.user.UserManager;
@@ -248,17 +249,17 @@ public class WebSecurityConfig {
 
         private static class RecaptchaLoginFilter extends GenericFilterBean {
             private final RequestMatcher requestMatcher;
-            private final RecaptchaService recaptchaService;
+            private final CaptchaService captchaService;
             private final String recaptchaFailureUrl;
             private final ConfigurationManager configurationManager;
 
 
-            RecaptchaLoginFilter(RecaptchaService recaptchaService,
+            RecaptchaLoginFilter(CaptchaService captchaService,
                                  String loginProcessingUrl,
                                  String recaptchaFailureUrl,
                                  ConfigurationManager configurationManager) {
                 this.requestMatcher = new AntPathRequestMatcher(loginProcessingUrl, "POST");
-                this.recaptchaService = recaptchaService;
+                this.captchaService = captchaService;
                 this.recaptchaFailureUrl = recaptchaFailureUrl;
                 this.configurationManager = configurationManager;
             }
@@ -269,7 +270,7 @@ public class WebSecurityConfig {
                 HttpServletRequest req = (HttpServletRequest) request;
                 HttpServletResponse res = (HttpServletResponse) response;
                 boolean captchaEnabled = configurationManager.getBooleanConfigValue(getSystemConfiguration(ENABLE_CAPTCHA_FOR_LOGIN), true);
-                if(captchaEnabled && requestMatcher.matches(req) && !recaptchaService.checkRecaptcha(req)) {
+                if(captchaEnabled && requestMatcher.matches(req) && !captchaService.checkCaptcha(req)) {
                     res.sendRedirect(recaptchaFailureUrl);
                     return;
                 }

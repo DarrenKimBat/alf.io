@@ -77,7 +77,8 @@ public class CheckInApiController {
                                           @PathVariable("ticketIdentifier") String ticketIdentifier,
                                           @RequestBody TicketCode ticketCode,
                                           Principal principal) {
-        return checkInManager.checkIn(eventId, ticketIdentifier, Optional.ofNullable(ticketCode).map(TicketCode::getCode), principal.getName());
+    	checkInManager.selectCheckInByTicketCode(Optional.ofNullable(ticketCode).map(TicketCode::getCode));
+        return checkInManager.checkInAndGetResult(eventId, ticketIdentifier, principal.getName());
     }
 
     @RequestMapping(value = "/check-in/event/{eventName}/ticket/{ticketIdentifier}", method = POST)
@@ -87,7 +88,7 @@ public class CheckInApiController {
                                           @RequestParam(value = "offlineUser", required = false) String offlineUser,
                                           Principal principal) {
         String user = StringUtils.defaultIfBlank(offlineUser, principal.getName());
-        return checkInManager.checkIn(eventName, ticketIdentifier, Optional.ofNullable(ticketCode).map(TicketCode::getCode), user);
+        return checkInManager.checkInAndGetResult(eventName, ticketIdentifier, Optional.ofNullable(ticketCode).map(TicketCode::getCode), user);
     }
 
     @RequestMapping(value = "/check-in/{eventId}/ticket/{ticketIdentifier}/manual-check-in", method = POST)
@@ -95,7 +96,8 @@ public class CheckInApiController {
                                  @PathVariable("ticketIdentifier") String ticketIdentifier,
                                  Principal principal) {
         log.warn("for event id : {} and ticket : {}, a manual check in has been done", eventId, ticketIdentifier);
-        return checkInManager.manualCheckIn(eventId, ticketIdentifier, principal.getName());
+        checkInManager.selectManualCheckIn();
+        return checkInManager.checkIn(eventId, ticketIdentifier, principal.getName());
     }
 
     @RequestMapping(value = "/check-in/{eventId}/ticket/{ticketIdentifier}/revert-check-in", method = POST)

@@ -79,17 +79,32 @@ public class CheckInManager {
     private final UserRepository userRepository;
     private final TicketReservationManager ticketReservationManager;
     private final ExtensionManager extensionManager;
-
-
-    private void checkIn(String uuid) {
-        Ticket ticket = ticketRepository.findByUUID(uuid);
-        Validate.isTrue(ticket.getStatus() == TicketStatus.ACQUIRED);
-        ticketRepository.updateTicketStatusWithUUID(uuid, TicketStatus.CHECKED_IN.toString());
-        ticketRepository.toggleTicketLocking(ticket.getId(), ticket.getCategoryId(), true);
-        extensionManager.handleTicketCheckedIn(ticketRepository.findByUUID(uuid));
+    
+    private CheckInMethod checkInMethod;
+    
+    
+    public void selectCheckInByTicketCode(Optional<String> ticketCode) {
+    	checkInMethod = new CheckInByTicketCode(this, ticketRepository, extensionManager, 
+    			scanAuditRepository, auditingRepository, userRepository, ticketCode);
+    }
+    public void selectManualCheckIn() {
+    	checkInMethod = new ManualCheckIn(this, ticketRepository, extensionManager, 
+    			scanAuditRepository, auditingRepository, userRepository);
+    }
+    
+    public TicketAndCheckInResult checkInAndGetResult(int eventId, String ticketIdentifier, String user) {
+    	return checkInMethod.checkInAndGetResult(eventId, ticketIdentifier, user);
+    }
+    
+    public boolean checkIn(int eventId, String ticketIdentifier, String user) {
+    	return checkInMethod.executeCheckIn(eventId, ticketIdentifier, user);
+    }
+    
+    public void checkIn(String uuid) {
+    	checkInMethod.checkIn(uuid);
     }
 
-    private void acquire(String uuid) {
+    void acquire(String uuid) {
         Ticket ticket = ticketRepository.findByUUID(uuid);
         Validate.isTrue(ticket.getStatus() == TicketStatus.TO_BE_PAID);
         ticketRepository.updateTicketStatusWithUUID(uuid, TicketStatus.ACQUIRED.toString());
@@ -97,9 +112,10 @@ public class CheckInManager {
     }
 
     public TicketAndCheckInResult confirmOnSitePayment(String eventName, String ticketIdentifier, Optional<String> ticketCode, String user) {
+    	selectCheckInByTicketCode(ticketCode);
         return eventRepository.findOptionalByShortName(eventName)
             .flatMap(e -> confirmOnSitePayment(ticketIdentifier).map((String s) -> Pair.of(s, e)))
-            .map(p -> checkIn(p.getRight().getId(), ticketIdentifier, ticketCode, user))
+            .map(p -> checkInAndGetResult(p.getRight().getId(), ticketIdentifier, user))
             .orElseGet(() -> new TicketAndCheckInResult(null, new DefaultCheckInResult(CheckInStatus.TICKET_NOT_FOUND, "")));
     }
 
@@ -112,34 +128,9 @@ public class CheckInManager {
         return uuid;
     }
 
-    public TicketAndCheckInResult checkIn(String shortName, String ticketIdentifier, Optional<String> ticketCode, String user) {
-        return eventRepository.findOptionalByShortName(shortName).map(e -> checkIn(e.getId(), ticketIdentifier, ticketCode, user)).orElseGet(() -> new TicketAndCheckInResult(null, new DefaultCheckInResult(CheckInStatus.EVENT_NOT_FOUND, "event not found")));
-    }
-
-    public TicketAndCheckInResult checkIn(int eventId, String ticketIdentifier, Optional<String> ticketCode, String user) {
-        TicketAndCheckInResult descriptor = extractStatus(eventId, ticketRepository.findByUUIDForUpdate(ticketIdentifier), ticketIdentifier, ticketCode);
-        if(descriptor.getResult().getStatus() == OK_READY_TO_BE_CHECKED_IN) {
-            checkIn(ticketIdentifier);
-            scanAuditRepository.insert(ticketIdentifier, eventId, ZonedDateTime.now(), user, SUCCESS, ScanAudit.Operation.SCAN);
-            auditingRepository.insert(descriptor.getTicket().getTicketsReservationId(), userRepository.findIdByUserName(user).orElse(null), eventId, Audit.EventType.CHECK_IN, new Date(), Audit.EntityType.TICKET, Integer.toString(descriptor.getTicket().getId()));
-            return new TicketAndCheckInResult(descriptor.getTicket(), new DefaultCheckInResult(SUCCESS, "success"));
-        }
-        return descriptor;
-    }
-
-    public boolean manualCheckIn(int eventId, String ticketIdentifier, String user) {
-        Optional<Ticket> ticket = findAndLockTicket(ticketIdentifier);
-        return ticket.map((t) -> {
-
-            if(t.getStatus() == TicketStatus.TO_BE_PAID) {
-                acquire(ticketIdentifier);
-            }
-
-            checkIn(ticketIdentifier);
-            scanAuditRepository.insert(ticketIdentifier, eventId, ZonedDateTime.now(), user, SUCCESS, ScanAudit.Operation.SCAN);
-            auditingRepository.insert(t.getTicketsReservationId(), userRepository.findIdByUserName(user).orElse(null), eventId, Audit.EventType.MANUAL_CHECK_IN, new Date(), Audit.EntityType.TICKET, Integer.toString(t.getId()));
-            return true;
-        }).orElse(false);
+    public TicketAndCheckInResult checkInAndGetResult(String shortName, String ticketIdentifier, Optional<String> ticketCode, String user) {
+    	selectCheckInByTicketCode(ticketCode);
+        return eventRepository.findOptionalByShortName(shortName).map(e -> checkInAndGetResult(e.getId(), ticketIdentifier, user)).orElseGet(() -> new TicketAndCheckInResult(null, new DefaultCheckInResult(CheckInStatus.EVENT_NOT_FOUND, "event not found")));
     }
 
     public boolean revertCheckIn(int eventId, String ticketIdentifier, String user) {
@@ -173,7 +164,7 @@ public class CheckInManager {
         return extractStatus(eventRepository.findOptionalByShortName(eventName), ticketRepository.findOptionalByUUID(ticketIdentifier), ticketIdentifier, ticketCode);
     }
 
-    private TicketAndCheckInResult extractStatus(int eventId, Optional<Ticket> maybeTicket, String ticketIdentifier, Optional<String> ticketCode) {
+    TicketAndCheckInResult extractStatus(int eventId, Optional<Ticket> maybeTicket, String ticketIdentifier, Optional<String> ticketCode) {
         return extractStatus(eventRepository.findOptionalById(eventId), maybeTicket, ticketIdentifier, ticketCode);
     }
 

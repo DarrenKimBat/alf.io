@@ -20,7 +20,7 @@ import alfio.model.*;
 import alfio.model.plugin.PluginConfigOption;
 import alfio.model.system.ComponentType;
 import alfio.plugin.PluginDataStorageProvider;
-import alfio.plugin.PluginDataStorageProvider.PluginDataStorage;
+import alfio.plugin.PluginDataStorage;
 import alfio.plugin.ReservationConfirmationPlugin;
 import alfio.plugin.TicketAssignmentPlugin;
 import alfio.plugin.WaitingQueueSubscriptionPlugin;

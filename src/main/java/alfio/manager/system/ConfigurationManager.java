@@ -16,6 +16,7 @@
  */
 package alfio.manager.system;
 
+import alfio.manager.system.configuration.*;
 import alfio.manager.user.UserManager;
 import alfio.model.Event;
 import alfio.model.modification.ConfigurationModification;
@@ -23,8 +24,6 @@ import alfio.model.system.Configuration;
 import alfio.model.system.Configuration.*;
 import alfio.model.system.ConfigurationKeys;
 import alfio.model.system.ConfigurationPathLevel;
-import alfio.model.transaction.PaymentProxy;
-import alfio.model.user.User;
 import alfio.repository.EventRepository;
 import alfio.repository.system.ConfigurationRepository;
 import lombok.AllArgsConstructor;
@@ -44,7 +43,6 @@ import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
 import static alfio.model.system.ConfigurationKeys.*;
-import static alfio.model.system.ConfigurationPathLevel.*;
 import static alfio.util.OptionalWrapper.optionally;
 
 @Component
@@ -53,11 +51,8 @@ import static alfio.util.OptionalWrapper.optionally;
 @AllArgsConstructor
 public class ConfigurationManager {
 
-    private static final Map<ConfigurationKeys.SettingCategory, List<Configuration>> ORGANIZATION_CONFIGURATION = collectConfigurationKeysByCategory(ORGANIZATION);
-    private static final Map<ConfigurationKeys.SettingCategory, List<Configuration>> EVENT_CONFIGURATION = collectConfigurationKeysByCategory(ConfigurationPathLevel.EVENT);
-    private static final Map<ConfigurationKeys.SettingCategory, List<Configuration>> CATEGORY_CONFIGURATION = collectConfigurationKeysByCategory(ConfigurationPathLevel.TICKET_CATEGORY);
 
-    private static final Predicate<ConfigurationModification> TO_BE_SAVED = c -> Optional.ofNullable(c.getId()).orElse(-1) > -1 || !StringUtils.isBlank(c.getValue());
+    public static final Predicate<ConfigurationModification> TO_BE_SAVED = c -> Optional.ofNullable(c.getId()).orElse(-1) > -1 || !StringUtils.isBlank(c.getValue());
 
 
     private final ConfigurationRepository configurationRepository;
@@ -66,24 +61,8 @@ public class ConfigurationManager {
 
     //TODO: refactor, not the most beautiful code, find a better solution...
     private Configuration findByConfigurationPathAndKey(ConfigurationPath path, ConfigurationKeys key) {
-        switch (path.pathLevel()) {
-            case SYSTEM: return configurationRepository.findByKey(key.getValue());
-            case ORGANIZATION: {
-                OrganizationConfigurationPath o = from(path);
-                return selectPath(configurationRepository.findByOrganizationAndKey(o.getId(), key.getValue()));
-            }
-            case EVENT: {
-                EventConfigurationPath o = from(path);
-                return selectPath(configurationRepository.findByEventAndKey(o.getOrganizationId(),
-                    o.getId(), key.getValue()));
-            }
-            case TICKET_CATEGORY: {
-                TicketCategoryConfigurationPath o = from(path);
-                return selectPath(configurationRepository.findByTicketCategoryAndKey(o.getOrganizationId(),
-                    o.getEventId(), o.getId(), key.getValue()));
-            }
-        }
-        throw new IllegalStateException("Can't reach here");
+        ConfigurationPathStrategy strategy = ConfigurationPathFactory.getPathStrategy(path.pathLevel(), configurationRepository);
+        return strategy.findConfiguration(path, key);
     }
 
     /**
@@ -92,7 +71,7 @@ public class ConfigurationManager {
      * @param conf
      * @return
      */
-    private Configuration selectPath(List<Configuration> conf) {
+    public static Configuration selectPath(List<Configuration> conf) {
         return conf.size() == 1 ? conf.get(0) : conf.stream()
             .sorted(Comparator.comparing(Configuration::getConfigurationPathLevel).reversed())
             .findFirst().orElse(null);
@@ -100,7 +79,7 @@ public class ConfigurationManager {
 
     //meh
     @SuppressWarnings("unchecked")
-    private static <T> T from(ConfigurationPath c) {
+    public static <T> T from(ConfigurationPath c) {
         return (T) c;
     }
 
@@ -145,122 +124,35 @@ public class ConfigurationManager {
     // begin SYSTEM related configuration methods
 
     public void saveConfig(ConfigurationPathKey pathKey, String value) {
-        ConfigurationPath path = pathKey.getPath();
-        switch (path.pathLevel()) {
-            case SYSTEM:
-                saveSystemConfiguration(pathKey.getKey(), value);
-                break;
-            case ORGANIZATION:
-                OrganizationConfigurationPath orgPath = (OrganizationConfigurationPath) path;
-                saveOrganizationConfiguration(orgPath.getId(), pathKey.getKey().name(), value);
-                break;
-            case EVENT:
-                EventConfigurationPath eventPath = (EventConfigurationPath) path;
-                saveEventConfiguration(eventPath.getId(), eventPath.getOrganizationId(), pathKey.getKey().name(), value);
-                break;
-        }
+        ConfigurationPathStrategy strategy = ConfigurationPathFactory.getPathStrategy(pathKey.getPath().pathLevel(), configurationRepository) ;
+        strategy.saveConfig(pathKey, value);
     }
 
     public void saveAllSystemConfiguration(List<ConfigurationModification> list) {
-        list.forEach(c -> saveSystemConfiguration(ConfigurationKeys.fromString(c.getKey()), c.getValue()));
-    }
-
-    private void saveOrganizationConfiguration(int organizationId, String key, String optionValue) {
-        Optional<String> value = evaluateValue(key, optionValue);
-        Optional<Configuration> existing = configurationRepository.findByKeyAtOrganizationLevel(organizationId, key);
-        if (!value.isPresent()) {
-            configurationRepository.deleteOrganizationLevelByKey(key, organizationId);
-        } else if (existing.isPresent()) {
-            configurationRepository.updateOrganizationLevel(organizationId, key, value.get());
-        } else {
-            configurationRepository.insertOrganizationLevel(organizationId, key, value.get(), ConfigurationKeys.fromString(key).getDescription());
-        }
+        new SystemPathStrategy(configurationRepository).saveAllSystemConfiguration(list);
     }
 
     public void saveAllOrganizationConfiguration(int organizationId, List<ConfigurationModification> list, String username) {
-        Validate.isTrue(userManager.isOwnerOfOrganization(userManager.findUserByUsername(username), organizationId), "Cannot update settings, user is not owner");
-        list.stream()
-            .filter(TO_BE_SAVED)
-            .forEach(c -> saveOrganizationConfiguration(organizationId, c.getKey(), c.getValue()));
-    }
-
-    private void saveEventConfiguration(int eventId, int organizationId, String key, String optionValue) {
-        Optional<Configuration> existing = configurationRepository.findByKeyAtEventLevel(eventId, organizationId, key);
-        Optional<String> value = evaluateValue(key, optionValue);
-        if(!value.isPresent()) {
-            configurationRepository.deleteEventLevelByKey(key, eventId);
-        } else if (existing.isPresent()) {
-            configurationRepository.updateEventLevel(eventId, organizationId, key, value.get());
-        } else {
-            configurationRepository.insertEventLevel(organizationId, eventId, key, value.get(), ConfigurationKeys.fromString(key).getDescription());
-        }
+        new OrganizationPathStrategy(configurationRepository).saveAllOrganizationConfiguration(userManager, organizationId, list, username);
     }
 
     public void saveAllEventConfiguration(int eventId, int organizationId, List<ConfigurationModification> list, String username) {
-        User user = userManager.findUserByUsername(username);
-        Validate.isTrue(userManager.isOwnerOfOrganization(user, organizationId), "Cannot update settings, user is not owner");
-        Event event = eventRepository.findById(eventId);
-        Validate.notNull(event, "event does not exist");
-        if(organizationId != event.getOrganizationId()) {
-            Validate.isTrue(userManager.isOwnerOfOrganization(user, event.getOrganizationId()), "Cannot update settings, user is not owner of event");
-        }
-        list.stream()
-            .filter(TO_BE_SAVED)
-            .forEach(c -> saveEventConfiguration(eventId, organizationId, c.getKey(), c.getValue()));
+        new EventPathStrategy(configurationRepository).saveAllEventConfiguration(userManager, eventRepository, eventId, organizationId, list, username);
     }
 
     public void saveCategoryConfiguration(int categoryId, int eventId, List<ConfigurationModification> list, String username) {
-        User user = userManager.findUserByUsername(username);
-        Event event = eventRepository.findById(eventId);
-        Validate.notNull(event, "event does not exist");
-        Validate.isTrue(userManager.isOwnerOfOrganization(user, event.getOrganizationId()), "Cannot update settings, user is not owner of event");
-        list.stream()
-            .filter(TO_BE_SAVED)
-            .forEach(c -> {
-                Optional<Configuration> existing = configurationRepository.findByKeyAtCategoryLevel(eventId, event.getOrganizationId(), categoryId, c.getKey());
-                Optional<String> value = evaluateValue(c.getKey(), c.getValue());
-                if(!value.isPresent()) {
-                    configurationRepository.deleteCategoryLevelByKey(c.getKey(), eventId, categoryId);
-                } else if (existing.isPresent()) {
-                    configurationRepository.updateCategoryLevel(eventId, event.getOrganizationId(), categoryId, c.getKey(), value.get());
-                } else {
-                    configurationRepository.insertTicketCategoryLevel(event.getOrganizationId(), eventId, categoryId, c.getKey(), value.get(), ConfigurationKeys.fromString(c.getKey()).getDescription());
-                }
-            });
+        new TicketCategoryStrategy(configurationRepository).saveCategoryConfiguration(userManager, eventRepository, categoryId, eventId, list, username);
     }
 
-    private Optional<String> evaluateValue(String key, String value) {
+    public void saveSystemConfiguration(ConfigurationKeys key, String value) {
+        new SystemPathStrategy(configurationRepository).saveSystemConfiguration(key, value);
+    }
+
+    public static Optional<String> evaluateValue(String key, String value) {
         if(ConfigurationKeys.fromString(key).isBooleanComponentType()) {
             return Optional.ofNullable(StringUtils.trimToNull(value));
         }
         return Optional.of(Objects.requireNonNull(value));
-    }
-
-    private Optional<Boolean> getThreeStateValue(String value) {
-        return Optional.ofNullable(StringUtils.trimToNull(value)).map(Boolean::parseBoolean);
-    }
-
-    public void saveSystemConfiguration(ConfigurationKeys key, String value) {
-        Optional<Configuration> conf = optionally(() -> findByConfigurationPathAndKey(Configuration.system(), key));
-        if(key.isBooleanComponentType()) {
-            Optional<Boolean> state = getThreeStateValue(value);
-            if(conf.isPresent()) {
-                if(state.isPresent()) {
-                    configurationRepository.update(key.getValue(), value);
-                } else {
-                    configurationRepository.deleteByKey(key.getValue());
-                }
-            } else {
-                state.ifPresent(v -> configurationRepository.insert(key.getValue(), v.toString(), key.getDescription()));
-            }
-        } else {
-            Optional<String> valueOpt = Optional.ofNullable(value);
-            if(!conf.isPresent()) {
-                valueOpt.ifPresent(v -> configurationRepository.insert(key.getValue(), v, key.getDescription()));
-            } else {
-                configurationRepository.update(key.getValue(), value);
-            }
-        }
     }
 
     /**
@@ -283,45 +175,17 @@ public class ConfigurationManager {
             });
     }
 
-    private Predicate<Configuration> checkActualConfigurationLevel(boolean isAdmin, ConfigurationPathLevel level) {
+    public static Predicate<Configuration> checkActualConfigurationLevel(boolean isAdmin, ConfigurationPathLevel level) {
         return conf -> isAdmin || conf.getConfigurationKey().supports(level);
     }
 
     public Map<ConfigurationKeys.SettingCategory, List<Configuration>> loadOrganizationConfig(int organizationId, String username) {
-        User user = userManager.findUserByUsername(username);
-        if(!userManager.isOwnerOfOrganization(user, organizationId)) {
-            return Collections.emptyMap();
-        }
-        boolean isAdmin = userManager.isAdmin(user);
-        Map<ConfigurationKeys.SettingCategory, List<Configuration>> existing = configurationRepository.findOrganizationConfiguration(organizationId).stream().filter(checkActualConfigurationLevel(isAdmin, ORGANIZATION)).sorted().collect(groupByCategory());
-        String paymentMethodsBlacklist = getStringConfigValue(Configuration.from(organizationId, ConfigurationKeys.PAYMENT_METHODS_BLACKLIST), "");
-        Map<SettingCategory, List<Configuration>> result = groupByCategory(isAdmin ? union(SYSTEM, ORGANIZATION) : ORGANIZATION_CONFIGURATION, existing);
-        List<SettingCategory> toBeRemoved = PaymentProxy.availableProxies()
-            .stream()
-            .filter(pp -> paymentMethodsBlacklist.contains(pp.getKey()))
-            .flatMap(pp -> pp.getSettingCategories().stream())
-            .collect(Collectors.toList());
-
-        if(toBeRemoved.isEmpty()) {
-            return result;
-        } else {
-            return result.entrySet().stream()
-                .filter(entry -> !toBeRemoved.contains(entry.getKey()))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        }
+        return new OrganizationPathStrategy(configurationRepository).loadOrganizationConfig(this, userManager, organizationId, username);
     }
 
     public Map<ConfigurationKeys.SettingCategory, List<Configuration>> loadEventConfig(int eventId, String username) {
-        User user = userManager.findUserByUsername(username);
-        Event event = eventRepository.findById(eventId);
-        int organizationId = event.getOrganizationId();
-        if(!userManager.isOwnerOfOrganization(user, organizationId)) {
-            return Collections.emptyMap();
-        }
-        boolean isAdmin = userManager.isAdmin(user);
-        Map<ConfigurationKeys.SettingCategory, List<Configuration>> existing = configurationRepository.findEventConfiguration(organizationId, eventId).stream().filter(checkActualConfigurationLevel(isAdmin, EVENT)).sorted().collect(groupByCategory());
-        boolean offlineCheckInEnabled = areBooleanSettingsEnabledForEvent(ALFIO_PI_INTEGRATION_ENABLED, OFFLINE_CHECKIN_ENABLED).test(event);
-        return removeAlfioPISettingsIfNeeded(offlineCheckInEnabled, groupByCategory(isAdmin ? union(SYSTEM, EVENT) : EVENT_CONFIGURATION, existing));
+        return new EventPathStrategy(configurationRepository).loadEventConfig(this, userManager, eventRepository, eventId, username);
+
     }
 
     public Predicate<Event> areBooleanSettingsEnabledForEvent(ConfigurationKeys... keys) {
@@ -329,16 +193,7 @@ public class ConfigurationManager {
             .allMatch(k -> getBooleanConfigValue(Configuration.from(event.getOrganizationId(), event.getId()).apply(k), false));
     }
 
-    private static Map<ConfigurationKeys.SettingCategory, List<Configuration>> removeAlfioPISettingsIfNeeded(boolean offlineCheckInEnabled, Map<ConfigurationKeys.SettingCategory, List<Configuration>> settings) {
-        if(offlineCheckInEnabled) {
-            return settings;
-        }
-        return settings.entrySet().stream()
-            .filter(e -> e.getKey() != ConfigurationKeys.SettingCategory.ALFIO_PI)
-            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    }
-
-    static Map<ConfigurationKeys.SettingCategory, List<Configuration>> union(ConfigurationPathLevel... levels) {
+    public static Map<ConfigurationKeys.SettingCategory, List<Configuration>> union(ConfigurationPathLevel... levels) {
         List<Configuration> configurations = Arrays.stream(levels)
             .sorted(ConfigurationPathLevel.COMPARATOR.reversed())
             .flatMap(l -> ConfigurationKeys.byPathLevel(l).stream().map(mapEmptyKeys(l)))
@@ -354,17 +209,10 @@ public class ConfigurationManager {
     }
 
     public Map<ConfigurationKeys.SettingCategory, List<Configuration>> loadCategoryConfig(int eventId, int categoryId, String username) {
-        User user = userManager.findUserByUsername(username);
-        Event event = eventRepository.findById(eventId);
-        int organizationId = event.getOrganizationId();
-        if(!userManager.isOwnerOfOrganization(user, organizationId)) {
-            return Collections.emptyMap();
-        }
-        Map<ConfigurationKeys.SettingCategory, List<Configuration>> existing = configurationRepository.findCategoryConfiguration(organizationId, eventId, categoryId).stream().sorted().collect(groupByCategory());
-        return groupByCategory(CATEGORY_CONFIGURATION, existing);
+        return new TicketCategoryStrategy(configurationRepository).loadCategoryConfig(userManager, eventRepository, eventId, categoryId, username);
     }
 
-    private Map<ConfigurationKeys.SettingCategory, List<Configuration>> groupByCategory(Map<ConfigurationKeys.SettingCategory, List<Configuration>> all, Map<ConfigurationKeys.SettingCategory, List<Configuration>> existing) {
+    public static Map<ConfigurationKeys.SettingCategory, List<Configuration>> groupByCategory(Map<ConfigurationKeys.SettingCategory, List<Configuration>> all, Map<ConfigurationKeys.SettingCategory, List<Configuration>> existing) {
         return all.entrySet().stream()
             .map(e -> {
                 Set<Configuration> entries = new TreeSet<>();
@@ -381,27 +229,14 @@ public class ConfigurationManager {
     }
 
     public Map<ConfigurationKeys.SettingCategory, List<Configuration>> loadAllSystemConfigurationIncludingMissing(String username) {
-        if(!userManager.isAdmin(userManager.findUserByUsername(username))) {
-            return Collections.emptyMap();
-        }
-        final List<Configuration> existing = configurationRepository.findSystemConfiguration()
-                .stream()
-                .filter(c -> !ConfigurationKeys.fromString(c.getKey()).isInternal())
-                .collect(Collectors.toList());
-        final List<Configuration> missing = Arrays.stream(ConfigurationKeys.visible())
-                .filter(k -> existing.stream().noneMatch(c -> c.getKey().equals(k.getValue())))
-                .map(mapEmptyKeys(ConfigurationPathLevel.SYSTEM))
-                .collect(Collectors.toList());
-        List<Configuration> result = new LinkedList<>(existing);
-        result.addAll(missing);
-        return result.stream().sorted().collect(groupByCategory());
+        return new SystemPathStrategy(configurationRepository).loadAllSystemConfigurationIncludingMissing(userManager, username);
     }
 
-    private static Collector<Configuration, ?, Map<ConfigurationKeys.SettingCategory, List<Configuration>>> groupByCategory() {
+    public static Collector<Configuration, ?, Map<ConfigurationKeys.SettingCategory, List<Configuration>>> groupByCategory() {
         return Collectors.groupingBy(c -> c.getConfigurationKey().getCategory());
     }
 
-    private static Function<ConfigurationKeys, Configuration> mapEmptyKeys(ConfigurationPathLevel level) {
+    public static Function<ConfigurationKeys, Configuration> mapEmptyKeys(ConfigurationPathLevel level) {
         return k -> new Configuration(-1, k.getValue(), null, k.getDescription(), level);
     }
 
@@ -410,8 +245,7 @@ public class ConfigurationManager {
     }
 
     public void deleteOrganizationLevelByKey(String key, int organizationId, String username) {
-        Validate.isTrue(userManager.isOwnerOfOrganization(userManager.findUserByUsername(username), organizationId), "User is not owner of the organization. Therefore, delete is not allowed.");
-        configurationRepository.deleteOrganizationLevelByKey(key, organizationId);
+        new OrganizationPathStrategy(configurationRepository).deleteOrganizationLevelByKey(userManager, key, organizationId, username);
     }
 
     public void deleteEventLevelByKey(String key, int eventId, String username) {
@@ -428,7 +262,7 @@ public class ConfigurationManager {
         configurationRepository.deleteCategoryLevelByKey(key, eventId, categoryId);
     }
 
-    private static Map<ConfigurationKeys.SettingCategory, List<Configuration>> collectConfigurationKeysByCategory(ConfigurationPathLevel pathLevel) {
+    public static Map<ConfigurationKeys.SettingCategory, List<Configuration>> collectConfigurationKeysByCategory(ConfigurationPathLevel pathLevel) {
         return ConfigurationKeys.byPathLevel(pathLevel)
             .stream()
             .map(mapEmptyKeys(pathLevel))

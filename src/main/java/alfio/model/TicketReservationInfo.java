@@ -44,6 +44,9 @@ public class TicketReservationInfo {
     }
 
     public String getFullName() {
+//      Method : UserNameContainer.getNameNotation('Country', 'firstName', 'lastName').getFullName();
+        return UserNameContainer.getNameNotation("korea", firstName, lastName).getFullName();
+
         return (firstName != null && lastName != null) ? (firstName + " " + lastName) : fullName;
     }
 
